@@ -1050,39 +1050,76 @@ const getWeather = () => {
   return {temp:temps[m],icon:icons[m],rain:rain[m],month:m};
 };
 const daysUntilWater = (p, lastDate, w) => {
-  if (!p || !p.water) return 999;
+  const wobj = p && (p.watering || p.water);
+  if (!wobj) return 999;
   const s = getSeason(w.month);
-  const key = (s==="spring"||s==="autumn") ? "w" : "s";
-  const val = p.water[key];
-  let base = (val != null && val > 0) ? val : (p.water.s || p.water.w || 7);
+  const isCold = s === "autumn" || s === "winter";
+  const base_warm = wobj.summer || wobj.s;
+  const base_cold = wobj.winter || wobj.w;
+  let base = isCold ? (base_cold || base_warm) : (base_warm || base_cold);
   if (!base || base <= 0) return 999;
-  if (w.rain > .4 && p.loc !== "intérieur") base = Math.round(base*1.5);
+  const loc = p.location || p.loc || "";
+  if (w.rain > .4 && loc !== "intérieur") base = Math.round(base * 1.5);
   const passed = Math.floor((Date.now() - new Date(lastDate)) / 86400000);
   return Math.max(0, base - passed);
 };
 const getNotifs = (garden, w) => {
-  const notifs = []; const m = w.month; const s = getSeason(m);
+  const notifs = [];
+  const m = w.month;
+  const s = getSeason(m);
   garden.forEach(gp => {
-    const p = PLANTS.find(x => x.id === gp.plantId); if(!p) return;
+    const p = PLANTS.find(x => x.id === gp.plantId);
+    if (!p) return;
+    const loc = p.location || p.loc || "";
+    const tMin = typeof (p.tempMin || p.tMin) === "number" ? (p.tempMin || p.tMin) : 5;
+
+    // ── Arrosage ───────────────────────────────────────────────────────────
     const dw = daysUntilWater(p, gp.lastWatered, w);
-    if(dw <= 1 && dw < 999) notifs.push({id:"water-"+gp.id, type:"water", name:gp.name, emoji:p.emoji, msg:dw===0?"Arrosage aujourd'hui !":"Arrosage demain", urg:dw===0?"urgent":"soon", color:"#4FC3F7", gpId:gp.id});
-    if(p.fert[s]) {
+    if (dw >= 0 && dw <= 1 && dw < 999) {
+      notifs.push({id:"water-"+gp.id, type:"water", name:gp.name, emoji:p.emoji,
+        msg:dw===0?"Arrosage aujourd\'hui !":"Arrosage demain",
+        urg:dw===0?"urgent":"soon", color:"#4FC3F7", gpId:gp.id});
+    }
+
+    // ── Fertilisation ──────────────────────────────────────────────────────
+    const fertObj = p.fertilizing || p.fert || {};
+    const fertVal = fertObj[s];
+    if (fertVal) {
       const dp = Math.floor((Date.now() - new Date(gp.lastFert||gp.added)) / 86400000);
-      if(dp >= p.fert[s]-2) notifs.push({id:"fert-"+gp.id, type:"fert", name:gp.name, emoji:p.emoji, msg:dp>=p.fert[s]?"Fertilisation due !":"Fertilisation bientôt", urg:dp>=p.fert[s]?"urgent":"soon", color:"#A5D6A7", gpId:gp.id});
+      if (dp >= fertVal - 2) {
+        notifs.push({id:"fert-"+gp.id, type:"fert", name:gp.name, emoji:p.emoji,
+          msg:dp>=fertVal?"Fertilisation due !":"Fertilisation bientôt",
+          urg:dp>=fertVal?"urgent":"soon", color:"#A5D6A7", gpId:gp.id});
+      }
     }
-    if(p.prune.months.includes(m)) {
+
+    // ── Taille ─────────────────────────────────────────────────────────────
+    const pruneObj = p.pruning || p.prune || {};
+    const pruneMonths = Array.isArray(pruneObj.months) ? pruneObj.months : [];
+    const pruneInterval = pruneObj.interval || null;
+    if (pruneMonths.includes(m)) {
       const dp = Math.floor((Date.now() - new Date(gp.lastPrune||gp.added)) / 86400000);
-      if(!p.prune.interval || dp >= p.prune.interval-7) notifs.push({id:"prune-"+gp.id, type:"prune", name:gp.name, emoji:p.emoji, msg:"Période de taille recommandée", urg:"info", color:"#FFCC80", gpId:gp.id});
+      if (!pruneInterval || dp >= pruneInterval - 7) {
+        notifs.push({id:"prune-"+gp.id, type:"prune", name:gp.name, emoji:p.emoji,
+          msg:"Période de taille recommandée", urg:"info", color:"#FFCC80", gpId:gp.id});
+      }
     }
-    if(p.loc === "intérieur/extérieur") {
-      const shouldIn = p.indoor.includes(m);
-      if(shouldIn && !gp.isIndoor) notifs.push({id:"move-"+gp.id, type:"move", name:gp.name, emoji:p.emoji, msg:"Rentrer — "+w.temp+"°C", urg:w.temp<p.tMin+3?"urgent":"soon", color:"#CE93D8", gpId:gp.id});
-      else if(!shouldIn && gp.isIndoor && w.temp > p.tMin+5) notifs.push({id:"move-"+gp.id, type:"move", name:gp.name, emoji:p.emoji, msg:"Sortir à l'extérieur 🌞", urg:"info", color:"#FFF176", gpId:gp.id});
+
+    // ── Déplacement intérieur/extérieur ────────────────────────────────────
+    if (loc === "intérieur/extérieur") {
+      const indoor = Array.isArray(p.indoorMonths || p.indoor) ? (p.indoorMonths || p.indoor) : [];
+      const shouldIn = indoor.includes(m);
+      if (shouldIn && !gp.isIndoor) {
+        notifs.push({id:"move-"+gp.id, type:"move", name:gp.name, emoji:p.emoji,
+          msg:"Rentrer — "+w.temp+"°C", urg:w.temp<tMin+3?"urgent":"soon", color:"#CE93D8", gpId:gp.id});
+      } else if (!shouldIn && gp.isIndoor && w.temp > tMin + 5) {
+        notifs.push({id:"move-"+gp.id, type:"move", name:gp.name, emoji:p.emoji,
+          msg:"Sortir à l\'extérieur 🌞", urg:"info", color:"#FFF176", gpId:gp.id});
+      }
     }
   });
   return notifs;
 };
-
 // ── INITIAL DATA ──────────────────────────────────────────────────────────────
 const INIT = [
   {id:"gp1",plantId:1,name:"Mon Monstera",added:new Date("2024-03-01").toISOString(),lastWatered:new Date(Date.now()-6*86400000).toISOString(),lastFert:new Date(Date.now()-12*86400000).toISOString(),lastPrune:new Date(Date.now()-170*86400000).toISOString(),isIndoor:true},
@@ -1121,16 +1158,16 @@ function App() {
   const filtered = PLANTS.filter(p => {
     const ms = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.family.toLowerCase().includes(search.toLowerCase());
     const mf = filter==="all" ? true
-      : filter==="int" ? p.loc==="intérieur"
-      : filter==="ext" ? p.loc==="extérieur"
-      : filter==="mix" ? p.loc==="intérieur/extérieur"
-      : filter==="easy" ? (p.diff==="Facile"||p.diff==="Très facile")
-      : filter==="pet" ? p.pet : true;
+      : filter==="int" ? (p.location||p.loc)==="intérieur"
+      : filter==="ext" ? (p.location||p.loc)==="extérieur"
+      : filter==="mix" ? (p.location||p.loc)==="intérieur/extérieur"
+      : filter==="easy" ? ((p.difficulty||p.diff)==="Facile"||(p.difficulty||p.diff)==="Très facile")
+      : filter==="pet" ? (p.petFriendly||p.pet) : true;
     return ms && mf;
   });
 
   const addToGarden = p => {
-    const gp = {id:"gp"+Date.now(), plantId:p.id, name:p.name, added:new Date().toISOString(), lastWatered:new Date().toISOString(), lastFert:new Date().toISOString(), lastPrune:new Date().toISOString(), isIndoor:p.loc==="intérieur"||p.indoor.includes(w.month)};
+    const gp = {id:"gp"+Date.now(), plantId:p.id, name:p.name, added:new Date().toISOString(), lastWatered:new Date().toISOString(), lastFert:new Date().toISOString(), lastPrune:new Date().toISOString(), isIndoor:(p.location||p.loc)==="intérieur"||(p.indoorMonths||p.indoor||[]).includes(w.month)};
     setGarden(g => [...g, gp]);
     showToast(p.emoji+" "+p.name+" ajouté !");
     setScreen("garden");
@@ -1237,8 +1274,8 @@ function App() {
               <div style={{fontSize:30, marginBottom:7}}>{p.emoji}</div>
               <div style={{fontSize:12, fontWeight:700, lineHeight:1.3, marginBottom:3}}>{p.name}</div>
               <div style={{fontSize:10, color:C.dim, fontStyle:"italic", marginBottom:5}}>{p.family}</div>
-              <div style={{fontSize:10, color:C.green}}>{p.loc==="intérieur"?"🏠":p.loc==="extérieur"?"🌳":"🔄"} {p.loc}</div>
-              {p.pet && <div style={{fontSize:9, color:"#90BE6D", marginTop:3}}>🐾 Pet-safe</div>}
+              <div style={{fontSize:10, color:C.green}}>{(p.location||p.loc)==="intérieur"?"🏠":(p.location||p.loc)==="extérieur"?"🌳":"🔄"} {(p.location||p.loc)}</div>
+              {(p.petFriendly||p.pet) && <div style={{fontSize:9, color:"#90BE6D", marginTop:3}}>🐾 Pet-safe</div>}
               {inG && <div style={{fontSize:9, color:C.green, marginTop:3}}>✓ Dans mon jardin</div>}
             </div>
           );
@@ -1260,21 +1297,21 @@ function App() {
           <div style={{fontSize:22, fontWeight:700, marginBottom:3}}>{p.name}</div>
           <div style={{fontSize:13, color:C.green, fontStyle:"italic", marginBottom:10}}>{p.family}</div>
           <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
-            <Badge color={p.color}>{p.loc==="intérieur"?"🏠":p.loc==="extérieur"?"🌳":"🔄"} {p.loc}</Badge>
-            {p.pet && <Badge color="#90BE6D">🐾 Pet-safe</Badge>}
-            <Badge color={C.amber}>Difficulté: {p.diff}</Badge>
+            <Badge color={p.color}>{(p.location||p.loc)==="intérieur"?"🏠":(p.location||p.loc)==="extérieur"?"🌳":"🔄"} {(p.location||p.loc)}</Badge>
+            {(p.petFriendly||p.pet) && <Badge color="#90BE6D">🐾 Pet-safe</Badge>}
+            <Badge color={C.amber}>Difficulté: {(p.difficulty||p.diff||"?")}</Badge>
           </div>
         </div>
         <div style={{padding:"16px 16px 20px"}}>
-          <p style={{fontSize:13, color:C.gLight, lineHeight:1.7, marginBottom:16}}>{p.desc}</p>
+          <p style={{fontSize:13, color:C.gLight, lineHeight:1.7, marginBottom:16}}>{(p.description||p.desc||"")}</p>
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14}}>
-            {[["💧 Arrosage été","tous les "+p.water.s+"j"],["❄️ Arrosage hiver",p.water.w?"tous les "+p.water.w+"j":"Aucun"],["🌡️ Temp. min",p.tMin+"°C"],["🌡️ Temp. max",p.tMax+"°C"],["☀️ Lumière",p.light],["💧 Humidité",p.hum],["🌱 Engrais saison",p.fert[s]?p.fert[s]+"j":"Pas maintenant"],["📍 Habitat",p.loc]].map(([l,v]) => (
+            {[["💧 Arrosage été","tous les "+((p.watering||p.water||{}).summer||7)+"j"],["❄️ Arrosage hiver",((p.watering||p.water||{}).winter) ?"tous les "+((p.watering||p.water||{}).winter||14)+"j":"Aucun"],["🌡️ Temp. min",(p.tempMin||p.tMin||"?")+"°C"],["🌡️ Temp. max",(p.tempMax||p.tMax||"?")+"°C"],["☀️ Lumière",(p.light||"?")],["💧 Humidité",(p.humidity||p.hum||"?")],["🌱 Engrais saison",((p.fertilizing||p.fert||{})[s]||0)+"j":"Pas maintenant"],["📍 Habitat",(p.location||p.loc||"?")]].map(([l,v]) => (
               <div key={l} style={infoItem}><div style={iLabel}>{l}</div><div style={iValue}>{v}</div></div>
             ))}
           </div>
-          {p.prune.months.length > 0 && <div style={{...infoItem, marginBottom:10}}><div style={iLabel}>✂️ Mois de taille</div><div style={{...iValue, fontSize:12, marginTop:3}}>{p.prune.months.map(m => MONTHS[m-1]).join(", ")}</div></div>}
-          {p.loc==="intérieur/extérieur" && p.indoor.length > 0 && <div style={{...infoItem, marginBottom:10}}><div style={iLabel}>🏠 Mois en intérieur</div><div style={{...iValue, fontSize:12, marginTop:3}}>{p.indoor.map(m => MONTHS[m-1]).join(", ")}</div></div>}
-          <div style={tipBox}><div style={{fontSize:11, color:C.green, marginBottom:4, fontWeight:700}}>💡 Conseil</div><div style={{fontSize:13, color:C.gLight, lineHeight:1.6}}>{p.tip}</div></div>
+          {((p.pruning||p.prune||{}).months||[]).length > 0 && <div style={{...infoItem, marginBottom:10}}><div style={iLabel}>✂️ Mois de taille</div><div style={{...iValue, fontSize:12, marginTop:3}}>{((p.pruning||p.prune||{}).months||[]).map(m => MONTHS[m-1]).join(", ")}</div></div>}
+          {(p.location||p.loc)==="intérieur/extérieur" && (p.indoorMonths||p.indoor||[]).length > 0 && <div style={{...infoItem, marginBottom:10}}><div style={iLabel}>🏠 Mois en intérieur</div><div style={{...iValue, fontSize:12, marginTop:3}}>{(p.indoorMonths||p.indoor||[]).map(m => MONTHS[m-1]).join(", ")}</div></div>}
+          <div style={tipBox}><div style={{fontSize:11, color:C.green, marginBottom:4, fontWeight:700}}>💡 Conseil</div><div style={{fontSize:13, color:C.gLight, lineHeight:1.6}}>{(p.tips||p.tip||"")}</div></div>
           {inG ? <div style={{...primaryBtn, opacity:.5, cursor:"default", textAlign:"center"}}>✓ Déjà dans votre jardin</div> : <button style={primaryBtn} onClick={() => addToGarden(p)}>+ Ajouter à mon jardin</button>}
         </div>
       </div>
@@ -1343,7 +1380,7 @@ function App() {
           <button style={ghostBtn(C.blue)} onClick={() => markDone(gp.id,"water")}>💧 Arrosé</button>
           <button style={ghostBtn("#A5D6A7")} onClick={() => markDone(gp.id,"fert")}>🌱 Fertilisé</button>
           <button style={ghostBtn(C.amber)} onClick={() => markDone(gp.id,"prune")}>✂️ Taillé</button>
-          {p.loc==="intérieur/extérieur" && (gp.isIndoor ? <button style={ghostBtn("#FFF176")} onClick={() => markDone(gp.id,"out")}>🌳 Sortir</button> : <button style={ghostBtn(C.purple)} onClick={() => markDone(gp.id,"in")}>🏠 Rentrer</button>)}
+          {(p.location||p.loc)==="intérieur/extérieur" && (gp.isIndoor ? <button style={ghostBtn("#FFF176")} onClick={() => markDone(gp.id,"out")}>🌳 Sortir</button> : <button style={ghostBtn(C.purple)} onClick={() => markDone(gp.id,"in")}>🏠 Rentrer</button>)}
         </div>
         <button style={{...ghostBtn(C.green), width:"100%", textAlign:"center", padding:"10px", marginBottom:10}} onClick={() => { setSelPlant(p); setScreen("plant"); }}>📋 Fiche technique</button>
         <button style={{background:"none", border:"1px solid "+C.red+"44", borderRadius:20, padding:"7px 14px", fontSize:12, color:C.red, fontFamily:"Georgia,serif", cursor:"pointer", marginTop:8}} onClick={() => setModal({type:"del",gpId:gp.id,name:gp.name})}>🗑 Supprimer</button>
