@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0D1810"/>
   <link rel="icon" href="data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIF..."/>
   <title>Botania 🌿</title>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{background:#0D1810;font-family:Georgia,serif}
@@ -1050,9 +1050,12 @@ const getWeather = () => {
   return {temp:temps[m],icon:icons[m],rain:rain[m],month:m};
 };
 const daysUntilWater = (p, lastDate, w) => {
+  if (!p || !p.water) return 999;
   const s = getSeason(w.month);
   const key = (s==="spring"||s==="autumn") ? "w" : "s";
-  let base = p.water[key] || p.water.s || 7;
+  const val = p.water[key];
+  let base = (val != null && val > 0) ? val : (p.water.s || p.water.w || 7);
+  if (!base || base <= 0) return 999;
   if (w.rain > .4 && p.loc !== "intérieur") base = Math.round(base*1.5);
   const passed = Math.floor((Date.now() - new Date(lastDate)) / 86400000);
   return Math.max(0, base - passed);
@@ -1062,7 +1065,7 @@ const getNotifs = (garden, w) => {
   garden.forEach(gp => {
     const p = PLANTS.find(x => x.id === gp.plantId); if(!p) return;
     const dw = daysUntilWater(p, gp.lastWatered, w);
-    if(dw <= 1) notifs.push({id:"water-"+gp.id, type:"water", name:gp.name, emoji:p.emoji, msg:dw===0?"Arrosage aujourd'hui !":"Arrosage demain", urg:dw===0?"urgent":"soon", color:"#4FC3F7", gpId:gp.id});
+    if(dw <= 1 && dw < 999) notifs.push({id:"water-"+gp.id, type:"water", name:gp.name, emoji:p.emoji, msg:dw===0?"Arrosage aujourd'hui !":"Arrosage demain", urg:dw===0?"urgent":"soon", color:"#4FC3F7", gpId:gp.id});
     if(p.fert[s]) {
       const dp = Math.floor((Date.now() - new Date(gp.lastFert||gp.added)) / 86400000);
       if(dp >= p.fert[s]-2) notifs.push({id:"fert-"+gp.id, type:"fert", name:gp.name, emoji:p.emoji, msg:dp>=p.fert[s]?"Fertilisation due !":"Fertilisation bientôt", urg:dp>=p.fert[s]?"urgent":"soon", color:"#A5D6A7", gpId:gp.id});
